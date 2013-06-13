@@ -1,0 +1,252 @@
+#!/bin/sh
+
+#############################################################################################
+#
+# MODULE:  i.WV2sharpening
+# AUTHOR(S): Claudio Meneghini
+# PURPOSE:	Pan-sharpening for WorldView-2 images with IHS method using prefixed coefficients.
+#           
+#
+#
+# COPYRIGHT:	(C) 2013 Claudio Meneghini
+#					Naples, Italy
+#					claudiomeneghini@gmail.com
+#
+#				This program is free software under the GNU General Public
+#				License (>=v2). Read the file COPYING that comes with GRASS
+#				for details.
+#
+#
+# 
+#############################################################################################
+
+#%Module
+#%  description: IHS pan-sharpening per le immagini WorldView-2.
+#%  keywords: imagery, Pan-sharpening, WorldView-2
+#%End
+#%option
+#% key: ms1
+#% type: string
+#% gisprompt: old,cell,raster
+#% description: Banda COASTAL
+#% required : yes
+#%end
+#%option
+#% key: ms2
+#% type: string
+#% gisprompt: old,cell,raster
+#% description: Banda BLUE
+#% required : yes
+#%end
+#%option
+#% key: ms3
+#% type: string
+#% gisprompt: old,cell,raster
+#% description: Banda GREEN 
+#% required : yes
+#%end
+#%option
+#% key: ms4
+#% type: string
+#% gisprompt: old,cell,raster
+#% description: Banda YELLOW
+#% required : yes
+#%end
+#%option
+#% key: ms5
+#% type: string
+#% gisprompt: old,cell,raster
+#% description: Banda RED
+#% required : yes
+#%end
+#%option
+#% key: ms6
+#% type: string
+#% gisprompt: old,cell,raster
+#% description: Banda REDEDGE
+#% required : yes
+#%end
+#%option
+#% key: ms7
+#% type: string
+#% gisprompt: old,cell,raster
+#% description: Banda NIR1
+#% required : yes
+#%end
+#%option
+#% key: pan
+#% type: string
+#% gisprompt: old,cell,raster
+#% description: Banda PANCROMATICO
+#% required : yes
+#%end
+#%option
+#% key: outputprefix
+#% type: string
+#% gisprompt: new,cell,raster
+#% description: Prefisso files output
+#% required : yes
+#%end
+
+COEFF1=0.044
+COEFF2=0.575
+COEFF3=0.808
+COEFF4=0.919
+COEFF5=0.984
+COEFF6=0.986
+COEFF7=0.276
+COEFFTOT=$COEFF1+$COEFF2+$COEFF3+$COEFF4+$COEFF5+$COEFF6+$COEFF7
+
+# Controllo avvio
+if test "$GISBASE" = ""; then
+	echo "Devi essere in GRASS GIS per eseguire questo programma." >&2
+	exit 1
+fi
+
+# Salvataggio linea di comando
+if [ "$1" != "@ARGS_PARSED@" ] ; then
+	CMDLINE=`basename "$0"`
+	for arg in "$@" ; do
+		CMDLINE="$CMDLINE \"$arg\""
+	done
+	export CMDLINE
+	exec g.parser "$0" "$@"
+fi
+
+cleanup()
+{
+	#remove temporary region file
+	unset WIND_OVERRIDE
+	g.remove region="i.WV2sharpening.$TMPPID" --quiet
+}
+
+# Controllo break utente:
+exitprocedure()
+{
+	g.message -e message='User break!'
+	cleanup
+	exit 1
+}
+
+# Shell verifica la pausa utente (lista segnali)
+trap "exitprocedure" 2 3 15
+
+# Controllo awk
+if [ ! -x "`which awk`" ] ; then
+	g.message -e "awk required, please install awk or gawk first" 
+	exit 1
+fi
+
+# Impostazioni ambiente, awk funzionante per tutte le lingue
+unset LC_ALL
+LC_NUMERIC=C
+export LC_NUMERIC
+
+TMPPID=$$
+
+# Ottenere risoluzione PAN:
+PANRES=`r.info "$GIS_OPT_PAN" | grep Res | tr -s ' ' ' ' | cut -d':' -f4 | cut -d' ' -f2 | tr '\n' ' '  | awk '{printf "%f\n", ($1+$2) / 2.}'`
+if [ $? -ne 0 ] ; then
+	g.message -e "Errore durante il parsing r.info output"
+	exit 1
+fi
+
+# Copia le impostazioni della regione corrente
+g.region save="i.WV2sharpening.$TMPPID"
+
+# Impostiamo la risoluzione geometrica della pancromatica
+# per effettuare il ricampionamento
+g.message -v message="Si utilizza la risoluzione geometrica della Pancromatica: $PANRES"
+WIND_OVERRIDE="i.WV2sharpening.$TMPPID"
+export WIND_OVERRIDE
+g.region res="$PANRES" -a
+
+g.message -v "Esecuzione del pan-sharpening IHS in corso..."
+
+g.message message="Calcolo <$GIS_OPT_OUTPUTPREFIX.red>"
+r.mapcalc "\"$GIS_OPT_OUTPUTPREFIX.red\" = ( \"$GIS_OPT_PAN\" ) - (( ( $COEFF1 * \"$GIS_OPT_MS1\" + $COEFF2 * \"$GIS_OPT_MS2\" + $COEFF3 * \"$GIS_OPT_MS3\" + $COEFF4 * \"$GIS_OPT_MS4\"  + $COEFF5 * \"$GIS_OPT_MS5\"  + $COEFF6 * \"$GIS_OPT_MS6\"  + $COEFF7 * \"$GIS_OPT_MS7\" ) / ( $COEFFTOT ) ) ) +  ( \"$GIS_OPT_MS5\" )"
+if [ $? -ne 0 ] ; then
+	g.message -e "Errore durante l'esecuzione r.mapcalc"
+	cleanup
+	exit 1
+fi
+g.message message="Calcolo <$GIS_OPT_OUTPUTPREFIX.green>"
+r.mapcalc "\"$GIS_OPT_OUTPUTPREFIX.green\" = ( \"$GIS_OPT_PAN\" ) - (( ( $COEFF1 * \"$GIS_OPT_MS1\" + $COEFF2 * \"$GIS_OPT_MS2\" + $COEFF3 * \"$GIS_OPT_MS3\" + $COEFF4 * \"$GIS_OPT_MS4\"  + $COEFF5 * \"$GIS_OPT_MS5\"  + $COEFF6 * \"$GIS_OPT_MS6\"  + $COEFF7 * \"$GIS_OPT_MS7\" ) / ( $COEFFTOT ) ) ) +  ( \"$GIS_OPT_MS3\" )"
+if [ $? -ne 0 ] ; then
+	g.message -e "Errore durante l'esecuzione r.mapcalc"
+	cleanup
+	exit 1
+fi
+g.message message="Calcolo <$GIS_OPT_OUTPUTPREFIX.blue>"
+r.mapcalc "\"$GIS_OPT_OUTPUTPREFIX.blue\" = ( \"$GIS_OPT_PAN\" ) - (( ( $COEFF1 * \"$GIS_OPT_MS1\" + $COEFF2 * \"$GIS_OPT_MS2\" + $COEFF3 * \"$GIS_OPT_MS3\" + $COEFF4 * \"$GIS_OPT_MS4\"  + $COEFF5 * \"$GIS_OPT_MS5\"  + $COEFF6 * \"$GIS_OPT_MS6\"  + $COEFF7 * \"$GIS_OPT_MS7\" ) / ( $COEFFTOT ) ) ) +  ( \"$GIS_OPT_MS2\" )"
+if [ $? -ne 0 ] ; then
+	g.message -e "Errore durante l'esecuzione r.mapcalc"
+	cleanup
+	exit 1
+fi
+g.message message="Calcolo <$GIS_OPT_OUTPUTPREFIX.coastal>"
+r.mapcalc "\"$GIS_OPT_OUTPUTPREFIX.coastal\" = ( \"$GIS_OPT_PAN\" ) - (( ( $COEFF1 * \"$GIS_OPT_MS1\" + $COEFF2 * \"$GIS_OPT_MS2\" + $COEFF3 * \"$GIS_OPT_MS3\" + $COEFF4 * \"$GIS_OPT_MS4\"  + $COEFF5 * \"$GIS_OPT_MS5\"  + $COEFF6 * \"$GIS_OPT_MS6\"  + $COEFF7 * \"$GIS_OPT_MS7\" ) / ( $COEFFTOT ) ) ) +  ( \"$GIS_OPT_MS1\" )"
+if [ $? -ne 0 ] ; then
+	g.message -e "Errore durante l'esecuzione r.mapcalc"
+	cleanup
+	exit 1
+fi
+g.message message="Calcolo <$GIS_OPT_OUTPUTPREFIX.yellow>"
+r.mapcalc "\"$GIS_OPT_OUTPUTPREFIX.yellow\" = ( \"$GIS_OPT_PAN\" ) - (( ( $COEFF1 * \"$GIS_OPT_MS1\" + $COEFF2 * \"$GIS_OPT_MS2\" + $COEFF3 * \"$GIS_OPT_MS3\" + $COEFF4 * \"$GIS_OPT_MS4\"  + $COEFF5 * \"$GIS_OPT_MS5\"  + $COEFF6 * \"$GIS_OPT_MS6\"  + $COEFF7 * \"$GIS_OPT_MS7\" ) / ( $COEFFTOT ) ) ) +  ( \"$GIS_OPT_MS4\" )"
+if [ $? -ne 0 ] ; then
+	g.message -e "Errore durante l'esecuzione r.mapcalc"
+	cleanup
+	exit 1
+fi
+g.message message="Calcolo <$GIS_OPT_OUTPUTPREFIX.rededge>"
+r.mapcalc "\"$GIS_OPT_OUTPUTPREFIX.rededge\" = ( \"$GIS_OPT_PAN\" ) - (( ( $COEFF1 * \"$GIS_OPT_MS1\" + $COEFF2 * \"$GIS_OPT_MS2\" + $COEFF3 * \"$GIS_OPT_MS3\" + $COEFF4 * \"$GIS_OPT_MS4\"  + $COEFF5 * \"$GIS_OPT_MS5\"  + $COEFF6 * \"$GIS_OPT_MS6\"  + $COEFF7 * \"$GIS_OPT_MS7\" ) / ( $COEFFTOT ) ) ) +  ( \"$GIS_OPT_MS6\" )"
+if [ $? -ne 0 ] ; then
+	g.message -e "Errore durante l'esecuzione r.mapcalc"
+	cleanup
+	exit 1
+fi
+g.message message="Calcolo <$GIS_OPT_OUTPUTPREFIX.nir1>"
+r.mapcalc "\"$GIS_OPT_OUTPUTPREFIX.nir1\" = ( \"$GIS_OPT_PAN\" ) - (( ( $COEFF1 * \"$GIS_OPT_MS1\" + $COEFF2 * \"$GIS_OPT_MS2\" + $COEFF3 * \"$GIS_OPT_MS3\" + $COEFF4 * \"$GIS_OPT_MS4\"  + $COEFF5 * \"$GIS_OPT_MS5\"  + $COEFF6 * \"$GIS_OPT_MS6\"  + $COEFF7 * \"$GIS_OPT_MS7\" ) / ( $COEFFTOT ) ) ) +  ( \"$GIS_OPT_MS7\" )"
+if [ $? -ne 0 ] ; then
+	g.message -e "Errore durante l'esecuzione r.mapcalc"
+	cleanup
+	exit 1
+fi
+
+#Creiamo la tabella dei colori per i file raster creati
+g.message message="Si assegna una tabella dei colori per ciascun raster creato."
+r.colors "$GIS_OPT_OUTPUTPREFIX.blue" col=grey
+r.colors "$GIS_OPT_OUTPUTPREFIX.green" col=grey
+r.colors "$GIS_OPT_OUTPUTPREFIX.red" col=grey
+r.colors "$GIS_OPT_OUTPUTPREFIX.coastal" col=grey
+r.colors "$GIS_OPT_OUTPUTPREFIX.yellow" col=grey
+r.colors "$GIS_OPT_OUTPUTPREFIX.rededge" col=grey
+r.colors "$GIS_OPT_OUTPUTPREFIX.nir1" col=grey
+
+g.message -v "Ritorno alle impostazioni iniziali della regione."
+cleanup
+
+g.message message="Il Pan-sharpening IHS ha generato in output i seguenti raster:"
+echo "$GIS_OPT_OUTPUTPREFIX.red"
+echo "$GIS_OPT_OUTPUTPREFIX.green"
+echo "$GIS_OPT_OUTPUTPREFIX.blue"
+echo "$GIS_OPT_OUTPUTPREFIX.coastal"
+echo "$GIS_OPT_OUTPUTPREFIX.yellow"
+echo "$GIS_OPT_OUTPUTPREFIX.rededge"
+echo "$GIS_OPT_OUTPUTPREFIX.nir1"
+
+
+g.message -v "To visualize output, run:"
+g.message -v message="g.region -p rast=$GIS_OPT_OUTPUTPREFIX.red ; d.erase"
+g.message -v message="d.rgb r=$GIS_OPT_OUTPUTPREFIX.red g=$GIS_OPT_OUTPUTPREFIX.green b=$GIS_OPT_OUTPUTPREFIX.blue"
+g.message -v "If desired, combine channels with 'r.composite' to a single map."
+
+# cmd history:
+r.support "$GIS_OPT_OUTPUTPREFIX.red" history="${CMDLINE}"
+r.support "$GIS_OPT_OUTPUTPREFIX.green" history="${CMDLINE}"
+r.support "$GIS_OPT_OUTPUTPREFIX.blue" history="${CMDLINE}"
+r.support "$GIS_OPT_OUTPUTPREFIX.coastal" history="${CMDLINE}"
+r.support "$GIS_OPT_OUTPUTPREFIX.yellow" history="${CMDLINE}"
+r.support "$GIS_OPT_OUTPUTPREFIX.rededge" history="${CMDLINE}"
+r.support "$GIS_OPT_OUTPUTPREFIX.nir1" history="${CMDLINE}"
+
